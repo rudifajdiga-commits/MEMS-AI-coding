@@ -9,24 +9,23 @@ h2{color:var(--acc);text-transform:uppercase;letter-spacing:2px;margin-top:0;fon
 .ph{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:10px;margin-bottom:15px;}
 h3{margin:0;font-size:1.1em;color:#fff;font-weight:500;}
 canvas{width:100%;border-radius:6px;background:#11151c;flex-grow:1;min-height:220px;}
-#c3d{min-height:400px; display:block; padding:0; margin:0;}
 .vg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:15px;text-align:center;}
 .vb{background:rgba(0,0,0,0.3);padding:10px;border-radius:6px;border-left:3px solid;}
 .vb.x{border-color:var(--r);} .vb.y{border-color:var(--g);} .vb.z{border-color:var(--b);}
-.vl{font-size:0.8em;color:#888;text-transform:uppercase;margin-bottom:5px;}
 .vn{font-family:monospace;font-size:1.2em;font-weight:bold;color:#fff;}
 .btn{background:transparent;color:var(--acc);border:1px solid var(--acc);padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:bold;text-transform:uppercase;transition:all 0.2s;}
 .btn:hover{background:var(--acc);color:var(--bg);box-shadow:0 0 15px rgba(102,252,241,0.5);}
-.btn:active{transform:scale(0.95);}
 .st{display:inline-block;padding:4px 8px;border-radius:4px;font-size:0.8em;font-weight:bold;background:rgba(74,255,74,0.2);color:var(--g);}
 .st.off{background:rgba(255,74,74,0.2);color:var(--r);}
 #c3d_container { width: 100%; height: 400px; position: relative; background: #11151c; border-radius: 6px; overflow: hidden; }
+#status_msg { font-size: 0.8em; color: #888; margin-top: 5px; min-height: 1.2em; }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 </head><body>
 <h2>Telemetry UI</h2>
-<div style="margin-bottom:20px;"><span id="conn" class="st off">DISCONNECTED</span></div>
+<div style="margin-bottom:20px; text-align:center;">
+    <span id="conn" class="st off">DISCONNECTED</span>
+    <div id="status_msg">System Initializing...</div>
+</div>
 
 <div class="dash">
   <div class="pnl">
@@ -41,17 +40,16 @@ canvas{width:100%;border-radius:6px;background:#11151c;flex-grow:1;min-height:22
     <div style="display:flex;flex-direction:column;height:100%;">
       <div class="ph"><h3>Euler Angles (Deg)</h3></div>
       <div class="vg">
-        <div class="vb x"><div class="vl">Roll</div><div class="vn" id="vr">0.0</div></div>
-        <div class="vb y"><div class="vl">Pitch</div><div class="vn" id="vp">0.0</div></div>
-        <div class="vb z"><div class="vl">Yaw</div><div class="vn" id="vy">0.0</div></div>
+        <div class="vb x"><div class="vn" id="vr">0.0</div></div>
+        <div class="vb y"><div class="vn" id="vp">0.0</div></div>
+        <div class="vb z"><div class="vn" id="vy">0.0</div></div>
       </div>
       <canvas id="co"></canvas>
-      
       <div class="ph" style="margin-top:20px;"><h3>Accelerometer (g)</h3></div>
       <div class="vg">
-        <div class="vb x"><div class="vl">X</div><div class="vn" id="vax">0.00</div></div>
-        <div class="vb y"><div class="vl">Y</div><div class="vn" id="vay">0.00</div></div>
-        <div class="vb z"><div class="vl">Z</div><div class="vn" id="vaz">0.00</div></div>
+        <div class="vb x"><div class="vn" id="vax">0.00</div></div>
+        <div class="vb y"><div class="vn" id="vay">0.00</div></div>
+        <div class="vb z"><div class="vn" id="vaz">0.00</div></div>
       </div>
       <canvas id="ca"></canvas>
     </div>
@@ -59,31 +57,35 @@ canvas{width:100%;border-radius:6px;background:#11151c;flex-grow:1;min-height:22
 </div>
 
 <script>
-// Graph Logic
+const msg = document.getElementById('status_msg');
+function log(t){ msg.innerText = t; console.log(t); }
+
+// Global Orientation Data
+let rawQ=[1,0,0,0], tareQ=[1,0,0,0], cQ=[1,0,0,0];
 const M=300;
 const ori={r:Array(M).fill(0),p:Array(M).fill(0),y:Array(M).fill(0)};
 const acc={x:Array(M).fill(0),y:Array(M).fill(0),z:Array(M).fill(0)};
+
+// UI/Graph Elements
 const co=document.getElementById('co'), ctxO=co.getContext('2d');
 const ca=document.getElementById('ca'), ctxA=ca.getContext('2d');
-
-let rawQ=[1,0,0,0], tareQ=[1,0,0,0], cQ=[1,0,0,0];
+const container = document.getElementById('c3d_container');
 
 function rs(){
     co.width=co.clientWidth; co.height=co.clientHeight;
     ca.width=ca.clientWidth; ca.height=ca.clientHeight;
 }
-window.onresize = () => { rs(); onWindowResize(); }; 
-rs();
+window.onresize = rs; rs();
 
+// Math Helpers
 function qM(a,b){return [a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]];}
 function qI(q){let l=q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3];return [q[0]/l,-q[1]/l,-q[2]/l,-q[3]/l];}
 function qE(q){let r=Math.atan2(2*(q[0]*q[1]+q[2]*q[3]),1-2*(q[1]*q[1]+q[2]*q[2]))*57.295;let p=Math.asin(Math.max(-1,Math.min(1,2*(q[0]*q[2]-q[3]*q[1]))))*57.295;let y=Math.atan2(2*(q[0]*q[3]+q[1]*q[2]),1-2*(q[2]*q[2]+q[3]*q[3]))*57.295;return [r,p,y];}
-
 document.getElementById('cb').onclick=()=>{tareQ=qI(rawQ);};
 
 function dg(ctx,d,min,max,c){
     ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
-    const w=ctx.canvas.width,h=ctx.canvas.height,r=max-min;
+    const w=ctx.canvas.width, h=ctx.canvas.height, r=max-min;
     ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();
     Object.keys(d).forEach((k,i)=>{
         ctx.strokeStyle=c[i];ctx.lineWidth=2;ctx.beginPath();
@@ -95,105 +97,114 @@ function dg(ctx,d,min,max,c){
     });
 }
 
-function updateGraphs(){
-    dg(ctxO,ori,-180,180,['#ff4a4a','#4aff4a','#4a4aff']);
-    dg(ctxA,acc,-4,4,['#ff4a4a','#4aff4a','#4a4aff']);
+// Rendering Logic: Fallback 2D human (always works)
+const bxs=[[0,0.5,0,2,3,1,'197,198,199'],[0,3.1,0,1,1.2,1,'102,252,241'],[-1.6,0.5,0,0.8,3,0.8,'100,100,105'],[1.6,0.5,0,0.8,3,0.8,'100,100,105'],[-0.5,-2.5,0,0.9,3,0.9,'60,60,65'],[0.5,-2.5,0,0.9,3,0.9,'60,60,65']];
+const pts=[],fs_base=[];
+bxs.forEach(b=>{let x=b[0],y=b[1],z=b[2],w=b[3]/2,h=b[4]/2,d=b[5]/2,c=b[6],S=pts.length;
+pts.push([x-w,y-h,z-d],[x+w,y-h,z-d],[x+w,y+h,z-d],[x-w,y+h,z-d],[x-w,y-h,z+d],[x+w,y-h,z+d],[x+w,y+h,z+d],[x-w,y+h,z+d]);
+fs_base.push({p:[S,S+1,S+2,S+3],c:`rgba(${c},0.9)`},{p:[S+5,S+4,S+7,S+6],c:`rgba(${c},0.8)`},{p:[S+3,S+2,S+6,S+7],c:`rgba(${c},1)`},{p:[S+4,S+5,S+1,S],c:`rgba(${c},0.5)`},{p:[S+4,S,S+3,S+7],c:`rgba(${c},0.7)`},{p:[S+1,S+5,S+6,S+2],c:`rgba(${c},0.7)`});});
+function qr(q,v){const t=[2*(q[2]*v[2]-q[3]*v[1]),2*(q[3]*v[0]-q[1]*v[2]),2*(q[1]*v[1]-q[2]*v[0])];return [v[0]+q[0]*t[0]+q[2]*t[2]-q[3]*t[1],v[1]+q[0]*t[1]+q[3]*t[0]-q[1]*t[2],v[2]+q[0]*t[2]+q[1]*t[1]-q[2]*t[0]];}
+
+let useWebGL = false;
+let threeScene, threeCamera, threeRenderer, loadedModel;
+
+function render2D(ctx){
+    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+    const cx=ctx.canvas.width/2, cy=ctx.canvas.height/2, sz=Math.min(cx,cy)*0.22;
+    let p3d=pts.map(p=>{let r=qr(cQ,p);return {x:r[0],y:r[1],z:r[2]};});
+    const proj=p3d.map(p=>[cx+p.x*sz,cy-p.y*sz,p.z]);
+    let fs=fs_base.map(f=>({p:f.p,c:f.c,z:(proj[f.p[0]][2]+proj[f.p[1]][2]+proj[f.p[2]][2]+proj[f.p[3]][2])/4}));
+    fs.sort((a,b)=>a.z-b.z); ctx.strokeStyle='rgba(102,252,241,0.3)';ctx.lineWidth=1;
+    fs.forEach(f=>{
+        ctx.fillStyle=f.c; ctx.beginPath(); ctx.moveTo(proj[f.p[0]][0],proj[f.p[0]][1]);
+        ctx.lineTo(proj[f.p[1]][0],proj[f.p[1]][1]);ctx.lineTo(proj[f.p[2]][0],proj[f.p[2]][1]);
+        ctx.lineTo(proj[f.p[3]][0],proj[f.p[3]][1]);ctx.closePath();ctx.fill();ctx.stroke();
+    });
 }
 
-// 3D WebGL Logic
-const container = document.getElementById('c3d_container');
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
-camera.position.set(0, 0, 5);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setSize(container.clientWidth, container.clientHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
-container.appendChild(renderer.domElement);
-
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambientLight);
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(5, 10, 7);
-scene.add(dirLight);
-
-const axesHelper = new THREE.AxesHelper(2);
-scene.add(axesHelper);
-
-let loadedModel = null;
-const loader = new THREE.GLTFLoader();
-loader.load('FinalBaseMesh.glb', function (gltf) {
-    loadedModel = gltf.scene;
+function startMainLoop(){
+    const c2d = document.createElement('canvas');
+    c2d.id = 'c2d';
+    container.appendChild(c2d);
+    const ctx2 = c2d.getContext('2d');
     
-    // Auto-center and scale model
-    const box = new THREE.Box3().setFromObject(loadedModel);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    
-    // Scale to fit within a ~3 unit box
-    const scale = 3.0 / maxDim;
-    loadedModel.scale.set(scale, scale, scale);
-    
-    // Center it
-    loadedModel.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-
-    // Create a pivot group so we can rotate it from the center
-    const pivot = new THREE.Group();
-    pivot.add(loadedModel);
-    scene.add(pivot);
-    loadedModel = pivot; // reassign to rotate the pivot
-
-}, undefined, function (error) {
-    console.error('Error loading model:', error);
-});
-
-function onWindowResize() {
-    camera.aspect = container.clientWidth / container.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(container.clientWidth, container.clientHeight);
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-    updateGraphs();
-    
-    if (loadedModel) {
-        // Apply quaternion rotation
-        // The IMU gives q0 (w), q1 (x), q2 (y), q3 (z)
-        // Three.js Quaternion takes (x, y, z, w)
-        const targetQ = new THREE.Quaternion(cQ[1], cQ[2], cQ[3], cQ[0]);
-        // Smoothly interpolate for better visual appearance
-        loadedModel.quaternion.slerp(targetQ, 0.3);
+    function lp(){
+        c2d.width = container.clientWidth; c2d.height = container.clientHeight;
+        dg(ctxO,ori,-180,180,['#ff4a4a','#4aff4a','#4a4aff']);
+        dg(ctxA,acc,-4,4,['#ff4a4a','#4aff4a','#4a4aff']);
+        if(useWebGL && loadedModel){
+            c2d.style.display = 'none';
+            const targetQ = new THREE.Quaternion(cQ[1], cQ[2], cQ[3], cQ[0]);
+            loadedModel.quaternion.slerp(targetQ, 0.2);
+            threeRenderer.render(threeScene, threeCamera);
+        } else {
+            render2D(ctx2);
+        }
+        requestAnimationFrame(lp);
     }
-    
-    renderer.render(scene, camera);
+    lp();
 }
-animate();
 
 // WebSocket Logic
 function cn(){
     const ws=new WebSocket('ws://'+location.host+'/ws');
     const c=document.getElementById('conn');
-    ws.onopen=()=>{c.className='st';c.innerText='CONNECTED';};
+    ws.onopen=()=>{c.className='st';c.innerText='CONNECTED'; log("Live Telemetry Active");};
     ws.onmessage=e=>{
         const d=JSON.parse(e.data);
-        rawQ=[d.q0,d.q1,d.q2,d.q3];
-        cQ=qM(tareQ,rawQ);
-        let el=qE(cQ); let r=el[0],p=el[1],y=el[2];
-        
-        ori.r.shift();ori.r.push(r);ori.p.shift();ori.p.push(p);ori.y.shift();ori.y.push(y);
+        rawQ=[d.q0,d.q1,d.q2,d.q3]; cQ=qM(tareQ,rawQ); let el=qE(cQ);
+        ori.r.shift();ori.r.push(el[0]);ori.p.shift();ori.p.push(el[1]);ori.y.shift();ori.y.push(el[2]);
         acc.x.shift();acc.x.push(d.ax);acc.y.shift();acc.y.push(d.ay);acc.z.shift();acc.z.push(d.az);
-        
-        document.getElementById('vr').innerText=r.toFixed(1);
-        document.getElementById('vp').innerText=p.toFixed(1);
-        document.getElementById('vy').innerText=y.toFixed(1);
+        document.getElementById('vr').innerText=el[0].toFixed(1);
+        document.getElementById('vp').innerText=el[1].toFixed(1);
+        document.getElementById('vy').innerText=el[2].toFixed(1);
         document.getElementById('vax').innerText=d.ax.toFixed(2);
         document.getElementById('vay').innerText=d.ay.toFixed(2);
         document.getElementById('vaz').innerText=d.az.toFixed(2);
     };
     ws.onclose=()=>{c.className='st off';c.innerText='DISCONNECTED';setTimeout(cn,1000);};
-    ws.onerror=ws.onclose;
 }
+
+// 3D Upgrade System
+async function tryUpgrade3D(){
+    log("Attempting 3D engine load...");
+    const loadS = (u) => new Promise((res,rej)=>{
+        const s=document.createElement('script'); s.src=u;
+        s.onload=res; s.onerror=rej; setTimeout(()=>rej("timeout"),4000);
+        document.head.appendChild(s);
+    });
+    try {
+        await loadS("https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js");
+        await loadS("https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js");
+        log("Engine loaded. Fetching high-poly model...");
+        initThree();
+    } catch(e) { log("Running in 2D Mode (Offline)"); }
+}
+
+function initThree(){
+    threeScene = new THREE.Scene();
+    threeCamera = new THREE.PerspectiveCamera(45, container.clientWidth/container.clientHeight, 0.1, 100);
+    threeCamera.position.set(0, 0, 5);
+    threeRenderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+    threeRenderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(threeRenderer.domElement);
+    threeScene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const dl=new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(5,10,7); threeScene.add(dl);
+    
+    new THREE.GLTFLoader().load('FinalBaseMesh.glb', (gltf)=>{
+        loadedModel = gltf.scene;
+        const box = new THREE.Box3().setFromObject(loadedModel);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const scale = 3.5 / Math.max(size.x, size.y, size.z);
+        loadedModel.scale.set(scale, scale, scale);
+        loadedModel.position.set(-center.x*scale, -center.y*scale, -center.z*scale);
+        const p = new THREE.Group(); p.add(loadedModel); threeScene.add(p); loadedModel = p;
+        useWebGL = true; log("High-Poly 3D Enabled");
+    }, undefined, (err)=>log("3D Model Fetch Failed"));
+}
+
+startMainLoop();
 cn();
+tryUpgrade3D();
 </script></body></html>
