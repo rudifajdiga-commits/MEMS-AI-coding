@@ -1,0 +1,199 @@
+<!DOCTYPE html><html><head><title>ESP32 IMU Dashboard</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#0b0c10;--pnl:#1f2833;--txt:#c5c6c7;--acc:#66fcf1;--r:#ff4a4a;--g:#4aff4a;--b:#4a4aff;}
+*{box-sizing:border-box;}
+body{font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--txt);margin:0;padding:20px;display:flex;flex-direction:column;align-items:center;}
+h2{color:var(--acc);text-transform:uppercase;letter-spacing:2px;margin-top:0;font-weight:600;text-shadow:0 0 10px rgba(102,252,241,0.3);}
+.dash{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:20px;width:100%;max-width:1400px;}
+.pnl{background:var(--pnl);border-radius:12px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.5);border:1px solid rgba(102,252,241,0.1);display:flex;flex-direction:column;}
+.ph{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:10px;margin-bottom:15px;}
+h3{margin:0;font-size:1.1em;color:#fff;font-weight:500;}
+canvas{width:100%;border-radius:6px;background:#11151c;flex-grow:1;min-height:220px;}
+#c3d{min-height:400px; display:block; padding:0; margin:0;}
+.vg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:15px;text-align:center;}
+.vb{background:rgba(0,0,0,0.3);padding:10px;border-radius:6px;border-left:3px solid;}
+.vb.x{border-color:var(--r);} .vb.y{border-color:var(--g);} .vb.z{border-color:var(--b);}
+.vl{font-size:0.8em;color:#888;text-transform:uppercase;margin-bottom:5px;}
+.vn{font-family:monospace;font-size:1.2em;font-weight:bold;color:#fff;}
+.btn{background:transparent;color:var(--acc);border:1px solid var(--acc);padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:bold;text-transform:uppercase;transition:all 0.2s;}
+.btn:hover{background:var(--acc);color:var(--bg);box-shadow:0 0 15px rgba(102,252,241,0.5);}
+.btn:active{transform:scale(0.95);}
+.st{display:inline-block;padding:4px 8px;border-radius:4px;font-size:0.8em;font-weight:bold;background:rgba(74,255,74,0.2);color:var(--g);}
+.st.off{background:rgba(255,74,74,0.2);color:var(--r);}
+#c3d_container { width: 100%; height: 400px; position: relative; background: #11151c; border-radius: 6px; overflow: hidden; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head><body>
+<h2>Telemetry UI</h2>
+<div style="margin-bottom:20px;"><span id="conn" class="st off">DISCONNECTED</span></div>
+
+<div class="dash">
+  <div class="pnl">
+    <div class="ph">
+      <h3>Spatial Orientation</h3>
+      <button class="btn" id="cb">Calibrate Zero</button>
+    </div>
+    <div id="c3d_container"></div>
+  </div>
+
+  <div class="pnl" style="justify-content:space-between;">
+    <div style="display:flex;flex-direction:column;height:100%;">
+      <div class="ph"><h3>Euler Angles (Deg)</h3></div>
+      <div class="vg">
+        <div class="vb x"><div class="vl">Roll</div><div class="vn" id="vr">0.0</div></div>
+        <div class="vb y"><div class="vl">Pitch</div><div class="vn" id="vp">0.0</div></div>
+        <div class="vb z"><div class="vl">Yaw</div><div class="vn" id="vy">0.0</div></div>
+      </div>
+      <canvas id="co"></canvas>
+      
+      <div class="ph" style="margin-top:20px;"><h3>Accelerometer (g)</h3></div>
+      <div class="vg">
+        <div class="vb x"><div class="vl">X</div><div class="vn" id="vax">0.00</div></div>
+        <div class="vb y"><div class="vl">Y</div><div class="vn" id="vay">0.00</div></div>
+        <div class="vb z"><div class="vl">Z</div><div class="vn" id="vaz">0.00</div></div>
+      </div>
+      <canvas id="ca"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+// Graph Logic
+const M=300;
+const ori={r:Array(M).fill(0),p:Array(M).fill(0),y:Array(M).fill(0)};
+const acc={x:Array(M).fill(0),y:Array(M).fill(0),z:Array(M).fill(0)};
+const co=document.getElementById('co'), ctxO=co.getContext('2d');
+const ca=document.getElementById('ca'), ctxA=ca.getContext('2d');
+
+let rawQ=[1,0,0,0], tareQ=[1,0,0,0], cQ=[1,0,0,0];
+
+function rs(){
+    co.width=co.clientWidth; co.height=co.clientHeight;
+    ca.width=ca.clientWidth; ca.height=ca.clientHeight;
+}
+window.onresize = () => { rs(); onWindowResize(); }; 
+rs();
+
+function qM(a,b){return [a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]];}
+function qI(q){let l=q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3];return [q[0]/l,-q[1]/l,-q[2]/l,-q[3]/l];}
+function qE(q){let r=Math.atan2(2*(q[0]*q[1]+q[2]*q[3]),1-2*(q[1]*q[1]+q[2]*q[2]))*57.295;let p=Math.asin(Math.max(-1,Math.min(1,2*(q[0]*q[2]-q[3]*q[1]))))*57.295;let y=Math.atan2(2*(q[0]*q[3]+q[1]*q[2]),1-2*(q[2]*q[2]+q[3]*q[3]))*57.295;return [r,p,y];}
+
+document.getElementById('cb').onclick=()=>{tareQ=qI(rawQ);};
+
+function dg(ctx,d,min,max,c){
+    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+    const w=ctx.canvas.width,h=ctx.canvas.height,r=max-min;
+    ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();
+    Object.keys(d).forEach((k,i)=>{
+        ctx.strokeStyle=c[i];ctx.lineWidth=2;ctx.beginPath();
+        for(let j=0;j<M;j++){
+            const x=(j/(M-1))*w; let v=d[k][j]; if(v>max)v=max; if(v<min)v=min;
+            const y=h-((v-min)/r)*h; j===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+        }
+        ctx.stroke();
+    });
+}
+
+function updateGraphs(){
+    dg(ctxO,ori,-180,180,['#ff4a4a','#4aff4a','#4a4aff']);
+    dg(ctxA,acc,-4,4,['#ff4a4a','#4aff4a','#4a4aff']);
+}
+
+// 3D WebGL Logic
+const container = document.getElementById('c3d_container');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+camera.position.set(0, 0, 5);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+container.appendChild(renderer.domElement);
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+
+const axesHelper = new THREE.AxesHelper(2);
+scene.add(axesHelper);
+
+let loadedModel = null;
+const loader = new THREE.GLTFLoader();
+loader.load('FinalBaseMesh.glb', function (gltf) {
+    loadedModel = gltf.scene;
+    
+    // Auto-center and scale model
+    const box = new THREE.Box3().setFromObject(loadedModel);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    
+    // Scale to fit within a ~3 unit box
+    const scale = 3.0 / maxDim;
+    loadedModel.scale.set(scale, scale, scale);
+    
+    // Center it
+    loadedModel.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+
+    // Create a pivot group so we can rotate it from the center
+    const pivot = new THREE.Group();
+    pivot.add(loadedModel);
+    scene.add(pivot);
+    loadedModel = pivot; // reassign to rotate the pivot
+
+}, undefined, function (error) {
+    console.error('Error loading model:', error);
+});
+
+function onWindowResize() {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    updateGraphs();
+    
+    if (loadedModel) {
+        // Apply quaternion rotation
+        // The IMU gives q0 (w), q1 (x), q2 (y), q3 (z)
+        // Three.js Quaternion takes (x, y, z, w)
+        const targetQ = new THREE.Quaternion(cQ[1], cQ[2], cQ[3], cQ[0]);
+        // Smoothly interpolate for better visual appearance
+        loadedModel.quaternion.slerp(targetQ, 0.3);
+    }
+    
+    renderer.render(scene, camera);
+}
+animate();
+
+// WebSocket Logic
+function cn(){
+    const ws=new WebSocket('ws://'+location.host+'/ws');
+    const c=document.getElementById('conn');
+    ws.onopen=()=>{c.className='st';c.innerText='CONNECTED';};
+    ws.onmessage=e=>{
+        const d=JSON.parse(e.data);
+        rawQ=[d.q0,d.q1,d.q2,d.q3];
+        cQ=qM(tareQ,rawQ);
+        let el=qE(cQ); let r=el[0],p=el[1],y=el[2];
+        
+        ori.r.shift();ori.r.push(r);ori.p.shift();ori.p.push(p);ori.y.shift();ori.y.push(y);
+        acc.x.shift();acc.x.push(d.ax);acc.y.shift();acc.y.push(d.ay);acc.z.shift();acc.z.push(d.az);
+        
+        document.getElementById('vr').innerText=r.toFixed(1);
+        document.getElementById('vp').innerText=p.toFixed(1);
+        document.getElementById('vy').innerText=y.toFixed(1);
+        document.getElementById('vax').innerText=d.ax.toFixed(2);
+        document.getElementById('vay').innerText=d.ay.toFixed(2);
+        document.getElementById('vaz').innerText=d.az.toFixed(2);
+    };
+    ws.onclose=()=>{c.className='st off';c.innerText='DISCONNECTED';setTimeout(cn,1000);};
+    ws.onerror=ws.onclose;
+}
+cn();
+</script></body></html>
